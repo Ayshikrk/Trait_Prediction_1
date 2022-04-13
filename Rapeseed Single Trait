@@ -1,1 +1,223 @@
+# main modules needed
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import tensorflow as tf
+from sklearn import linear_model
+from sklearn.model_selection import train_test_split
+from matplotlib import pyplot as plt
+from scipy import stats
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import scale
+from sklearn import preprocessing
+from sklearn.impute import SimpleImputer
+from sklearn import metrics
+from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import classification_report,confusion_matrix
+from sklearn.metrics import roc_curve, auc
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
+from scipy.stats import norm 
+from scipy.stats import sem
+from scipy.stats import shapiro
 
+
+
+ 
+# keras items 
+from keras import regularizers
+from keras.models import Sequential, load_model
+from keras.layers import Dense, Activation, Dropout
+from keras.layers import Flatten, Conv1D, MaxPooling1D, LSTM #CNNs
+from keras.activations import relu, elu, linear, softmax
+from keras.callbacks import EarlyStopping, Callback
+from keras.wrappers.scikit_learn import KerasRegressor
+from tensorflow.keras.optimizers import Adam, Nadam, SGD
+from keras.losses import mean_squared_error, categorical_crossentropy, logcosh
+from keras.utils.np_utils import to_categorical
+
+#upload datasets
+from google.colab import files
+uploaded = files.upload()
+
+
+X_T = pd.read_csv('X_New.csv', header = None)
+X_T = X_T.loc[~(X_T==0).all(axis=1)]
+X= X_T.T
+
+print(X.shape)
+print(X.head(5))
+Y_T = pd.read_csv('Y_New.csv', header = None)
+#Y_T = Y_T.loc[~(Y_T==0).all(axis=1)]
+Y= Y_T.T
+
+#Normalize
+#min-max
+X=(X-X.min())/(X.max()-X.min())
+Y=(Y-Y.min())/(Y.max()-Y.min())
+
+X.replace(np.inf, 0, inplace=True)
+
+print(np.any(np.isnan(X)))
+print(np.all(np.isfinite(X)))
+count = np.isinf(X).values.sum()
+print("Infinite: ",count)
+
+X = X.fillna(0)
+count_nan_in_df = X.isnull().sum().sum()
+print ('NaN: ' + str(count_nan_in_df))
+
+print(Y.shape)
+print(Y.head(5))
+
+itrait=0 # first trait analyzed
+X_train, X_test, y_train, y_test = train_test_split(X, Y[itrait], test_size=0.2)
+print(X_train.shape, y_train.shape)
+print(X_test.shape, y_test.shape)
+
+
+# print basic statistics: max, min, mean, sd
+print('       min max mean sd')
+print('Train:', y_train.min(), y_train.max(), y_train.mean(), np.sqrt(y_train.var()))
+print('Test:', y_test.min(), y_test.max(), y_test.mean(), np.sqrt(y_test.var()))
+
+# do basic histograms
+plt.title('Train / test data')
+plt.hist(y_train, label='Train')
+plt.hist(y_test, label='Test')
+plt.legend(loc='best')
+plt.show()
+
+# PCA
+X = np.concatenate((X_train, X_test))
+X = StandardScaler().fit_transform(X)
+pca = PCA(n_components=2)
+#X = pd.DataFrame(X).fillna(X.mean())
+p = pca.fit(X).fit_transform(X)
+Ntrain=X_train.shape[0]
+plt.title('PCA decomposition')
+plt.scatter(p[0:Ntrain,0], p[0:Ntrain,1], label='Train')
+plt.scatter(p[Ntrain:,0], p[Ntrain:,1], label='Test', color='orange')
+plt.legend(loc='best')
+plt.show()
+
+pvals = []
+for i in range(X_train.shape[1]):
+    b, intercept, r_value, p_value, std_err = stats.linregress(X_train[X_train.columns[i]], y_train)
+    pvals.append(-np.log10(p_value))
+pvals = np.array(pvals)
+
+# plot GWAS
+plt.ylabel('-log10 P-value')
+plt.xlabel('SNP')
+plt.plot(pvals, marker='o')
+plt.show()
+
+# select N_best most associated SNPs
+#N_best = X_train.shape[1] #all SNPs
+N_best = 100
+snp_list = pvals.argsort()[-N_best:]
+
+# or select by min_P_value
+min_P_value = 2 # P = 0.01
+snp_list = np.nonzero(pvals>min_P_value)
+
+# finally slice X
+X_train = X_train[X_train.columns[snp_list]] 
+X_test = X_test[X_test.columns[snp_list]]
+
+# Standard penalized methods (lasso using scikit-learn)
+
+# alpha is the regularization parameter
+
+lasso = linear_model.Lasso(alpha=0.01, tol=0.1)
+lasso.fit(X_train, y_train)
+y_hat = lasso.predict(X_test)
+
+# mean squared error
+mse = metrics.mean_squared_error(y_test, y_hat)
+print('\nMSE in prediction =',mse)
+
+cv_mse_lasso = cross_val_score(lasso, X, Y[itrait], cv=10, scoring='neg_mean_squared_error')
+print('\nAll MSE in prediction =',cv_mse_lasso)
+avg_cv_mse_lasso = abs((sum(cv_mse_lasso))/10)
+print('\nCross Validated MSE in prediction =',avg_cv_mse_lasso)
+sem_lasso = sem(cv_mse_lasso)
+print('\nStandard Error of MSE in prediction =',sem_lasso)
+
+# correlation btw predicted and observed
+corr = np.corrcoef(y_test,y_hat)[0,1]
+print('\nCorr obs vs pred =',corr)
+
+# plot observed vs. predicted targets
+plt.title('Lasso: Observed vs Predicted Y')
+plt.ylabel('Predicted')
+plt.xlabel('Observed')
+plt.scatter(y_test, y_hat, marker='o')
+plt.show()
+
+#Random Forest
+
+RFReg = RandomForestRegressor(n_estimators = 50, random_state = 0)
+RFReg.fit(X_train, y_train)
+y_predict_rfr = RFReg.predict((X_test))
+mse_rand = metrics.mean_squared_error(y_test, y_predict_rfr)
+print('MSE = ', mse_rand)
+
+cv_mse_rf= cross_val_score(RFReg, X, Y[itrait], cv=10, scoring='neg_mean_squared_error')
+print('\nAll MSE in prediction =',cv_mse_rf)
+avg_cv_mse_rf = abs((sum(cv_mse_rf))/10)
+print('\nCross Validated MSE in prediction =',avg_cv_mse_rf)
+sem_rf = sem(cv_mse_rf)
+print('\nStandard Error of MSE in prediction =',sem_rf)
+
+#SVM
+
+svm_regressor=SVR(kernel='rbf')
+svm_regressor.fit(X_train,y_train)
+
+y_predict_svm = svm_regressor.predict((X_test))
+mse_svm = metrics.mean_squared_error(y_test, y_predict_svm)
+cv_mse_svm= cross_val_score(svm_regressor, X, Y[itrait], cv=10, scoring='neg_mean_squared_error')
+print('\nAll MSE in prediction =',cv_mse_svm)
+avg_cv_mse_svm = abs((sum(cv_mse_svm))/10)
+print('\nCross Validated MSE in prediction =',avg_cv_mse_svm)
+sem_svm = sem(cv_mse_svm)
+print('\nStandard Error of MSE in prediction =',sem_svm)
+
+#MLP
+
+# no. of SNPs in data
+nSNP=X_train.shape[1] 
+
+def mlp_model():
+    model = Sequential()
+    model.add(Dense(64, input_dim=nSNP))
+    model.add(Activation('relu'))
+    model.add(Dense(32))
+    model.add(Activation('softplus'))
+    model.add(Dense(1))
+    model.compile(loss='mean_squared_error', optimizer='adam')
+    return model
+
+kf = KFold(n_splits=10)
+all_scores = []
+for train_index, test_index in kf.split(X):
+  X_train,X_test = X[train_index], X[test_index]
+  y_train,y_test = Y[itrait][train_index], Y[itrait][test_index]
+  model = mlp_model()
+  model.fit(X_train, y_train, epochs = 100, batch_size = 128)
+  val_mse = model.evaluate(X_test,y_test)
+  all_scores.append(val_mse)
+
+print('\nAll MSE in prediction =',all_scores)
+cv_mse_mlp = sum(all_scores)/10
+
+print('\ncv = ', cv_mse_mlp)
+sem_mlp = sem(all_scores)
+print('\nStandard Error of MSE in prediction =',sem_mlp)
